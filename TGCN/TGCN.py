@@ -8,6 +8,7 @@ import re
 from google.colab import drive
 from tqdm import tqdm
 import random
+import scipy.sparse as sp
 
 import tensorflow as tf
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -40,7 +41,7 @@ class DataReader:
         for data_id, line in enumerate(d_lines):
             features = line.split('<fff>')
             label, doc_id, sentence_length = int(features[0]), int(features[1]), int(features[2])
-            tokens = int(features[3].split())
+            tokens = features[3].split()
 
             self._data.append(tokens)
             self._sentence_lengths.append(sentence_length)
@@ -166,94 +167,14 @@ def encode_data(data_path, vocab_path):
   file_name = '-'.join(data_path.split('/')[-1].split('-')[:-1]) + '-encoded.txt'
   with open(dir_name + '/' + file_name, 'w') as f:
     f.write('\n'.join(encoded_data))
+        
 
-class Text_Graph_Convolutional_Networks(tf.keras.Model):
-    def __init__(self,
-                 vocab_size,
-                 embedding_size,
-                 num_classes,
-                 window_size,
-                 batch_size):
-        super(Text_Graph_Convolutional_Networks, self).__init__()
-
-        self._vocab_size = vocab_size
-        self._embedding_size = embedding_size
-        self._batch_size = batch_size
-        self._num_classes = num_classes
-        self._window_size = window_size
-
-        self._data = tf.compat.v1.placeholder(tf.int32, shape=[batch_size, MAX_DOC_LENGTH])
-        self._labels = tf.compat.v1.placeholder(tf.int32, shape=[batch_size, ])
-        self._tfidf_matrix = tf.compat.v1.placeholder(tf.float32, shape=[None, None])
-        self._pmi_matrix = tf.compat.v1.placeholder(tf.float32, shape=[None, None])
-
-        self.A = tf.compat.v1.placeholder(tf.float32, shape=[None, None])
-        self.X = tf.compat.v1.placeholder(tf.float32, shape=[None, None])
-
-
-        #self.A, self.X = self.build_graph()
-        #self.logits = self.trainer()
-
-    '''def build_graph(self):
-      tfidf_matrix = self._tfidf_matrix #
-
-      pmi_matrix = self._pmi_matrix #
-
-      A = np.zeros((self._vocab_size + 2 + self._data.shape[0], self._vocab_size + 2 + self._data.shape[0]))
-
-      for i in range(2, self._vocab_size + 2):
-        for j in range(self._vocab_size + 2, self._vocab_size + 2 + self._data.shape[0]):
-          A[i, j] = tfidf_matrix[j - self._vocab_size, i]
-
-      A[2:self._vocab_size + 2, 2:self._vocab_size + 2] = pmi_matrix
-      A += np.eye(A.shape[0])
-
-      D = np.diag(np.sum(A, axis=1) ** (-0.5))
-      A_ = D @ A @ D
-
-      X = np.eye(self._vocab_size + 2 + self._data.shape[0], dtype=np.float32)
-
-      return tf.constant(A, dtype=tf.float32), tf.constant(X, dtype=tf.float32) # Ko train'''
-
-    def trainer(self, learning_rate):
-      #W0 = tf.compat.v1.variable(tf.random.normal([self._vocab_size + 2 + self._data.shape[0], self._embedding_size]), name='W0')
-      W0 = tf.compat.v1.get_variable(
-          name='W0_18',
-          shape=(self._vocab_size + 2 + self._data.shape[0], self._embedding_size),
-          initializer=tf.random_normal_initializer(seed=Random_seed)
-          #reuse=tf.compat.v1.AUTO_REUSE
-      )
-      #W1 = tf.compat.v1.variable(tf.random.normal([self._embedding_size, self._num_classes]), name='W1')
-      W1 = tf.compat.v1.get_variable(
-          name='W1_18',
-          shape=(self._embedding_size, self._num_classes),
-          initializer=tf.random_normal_initializer(seed=Random_seed)
-          #reuse=tf.compat.v1.AUTO_REUSE
-      )
-
-      h1 = tf.nn.relu(tf.matmul(self.normalize_adjacency_matrix(self.A), tf.matmul(self.X, W0)))
-
-      logits = tf.matmul(self.normalize_adjacency_matrix(self.A), h1) @ W1
-      predict = tf.nn.softmax(logits)
-
-
-      loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self._labels, logits=logits))
-      # Add Regularization ...
-
-      optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=learning_rate)
-      train_op = optimizer.minimize(loss)
-
-      return predict, loss, train_op
-    def normalize_adjacency_matrix(self, A):
-        D = tf.compat.v1.diag(tf.pow(tf.reduce_sum(A, axis=1), -0.5))
-        return D @ A @ D
-
-def compute_tfidf(X, vocab_size):
+def compute_tfidf(data, vocab_size):
   # tfidf
-  X_texts = [' '.join(map(str, row)) for row in X]
+  data_texts = [' '.join(map(str, row)) for row in data]
   vocab =  [str(i) for i in range(vocab_size + 2)]
   vectorizer = TfidfVectorizer(vocabulary=vocab)
-  tfidf_matrix = vectorizer.fit_transform(X_texts)
+  tfidf_matrix = vectorizer.fit_transform(data_texts)
   '''vectorizer = TfidfTransformer(norm=None, use_idf=True, smooth_idf=True, sublinear_tf=False)
   tfidf_matrix = vectorizer.fit_transform(X).toarray()'''
   return tfidf_matrix
@@ -274,13 +195,64 @@ def compute_pmi(X, vocab_size, window_size):
       for j in range(i+1, len(window)):
         word_pair_counts[int(window[i]), int(window[j])] += 1
         word_pair_counts[int(window[j]), int(window[i])] += 1
-  epsilon = 1e-3
+  epsilon = 1e-8
   print("1 ...")
-  pmi_matrix = np.log((word_pair_counts / (word_counts[:, None] * word_counts[None, :] + epsilon)) + epsilon)
+  matrix_1 = np.outer(word_counts, word_counts) + epsilon
+  print("1.5 ...")
+  pmi_matrix = np.log((word_pair_counts / matrix_1) + epsilon)
   print("2 ...")
   pmi_matrix[pmi_matrix <= 0] = 0
   print("3 ...")
   return pmi_matrix
+
+def build_adjacency_matrix(data, vocab_size, doc_count, window_size):
+  tfidf_matrix = compute_tfidf(data, vocab_size)
+  print("Computing tfidf success !!!")
+  print(f"tfidf train size = {tfidf_matrix.shape}")
+  print("Computing pmi ...")
+  pmi_matrix = compute_pmi(data, vocab_size, window_size=window_size)
+  print("Computing success !!!")
+  A = np.zeros((vocab_size + 2 + doc_count, vocab_size + 2 + doc_count), dtype=np.float32)
+  A[:vocab_size + 2, vocab_size + 2:vocab_size + 2 + doc_count] = tfidf_matrix.T.toarray()    #(11314, 18988) => (18988, 11314)  vocab_size = 18986
+  A[:vocab_size + 2, :vocab_size + 2] = pmi_matrix
+  np.fill_diagonal(A, 1)
+  D = np.diag(np.sum(A, axis=1) ** (-0.5))
+  A_ = (D * A) * D
+  return A_
+
+def build_feature_matrix(vocab_size, doc_count):
+  X = np.eye(vocab_size + 2 + doc_count, dtype=np.float32)
+  return X
+
+class Text_Graph_Convolutional_Networks(tf.keras.Model):
+    def __init__(self,
+                 data,
+                 vocab_size,
+                 doc_count,
+                 hidden_dim,
+                 num_classes,
+                 window_size):
+      super(Text_Graph_Convolutional_Networks, self).__init__()
+      self._data = data
+      #self.A = tf.constant(build_adjacency_matrix(data, vocab_size=vocab_size, doc_count=doc_count, window_size=window_size), dtype=tf.float32)
+      #self.X = tf.constant(build_feature_matrix(vocab_size, doc_count), dtype=tf.float32)
+
+      #self.A, self.X = build_adjacency_matrix(data, vocab_size=vocab_size, doc_count=doc_count, window_size=window_size), build_feature_matrix(vocab_size, doc_count)
+      self.A = sp.csr_matrix(build_adjacency_matrix(data, vocab_size, doc_count, window_size))
+      self.X = build_feature_matrix(vocab_size, doc_count)
+
+      # Nếu không làm như vậy  thì A, X quá lớn => bị lỗi "ValueError: Cannot create a tensor proto whose content is larger than 2GB.""
+      
+
+      self.GCN1 = tf.keras.layers.Dense(hidden_dim, activation=tf.nn.relu)
+      self.GCN2 = tf.keras.layers.Dense(num_classes, activation=tf.nn.softmax)
+
+    def call(self, inputs):
+      #h = self.GCN1(tf.matmul(self.A, self.X))
+      #h = tf.concat([self.gcn1(tf.matmul(self.A_blocks[i], self.X_blocks[i])) for i in range(len(self.A_blocks))], axis=0)
+      h = self.gcn1(tf.sparse.sparse_dense_matmul(self.A, self.X))
+      logits = self.GCN2(h)
+      return logits
 
 
 if __name__ == "__main__":
@@ -317,115 +289,22 @@ if __name__ == "__main__":
   vocab_size=len(vocab)
   print(f"vocab_size = {vocab_size}")
 
-  model = Text_Graph_Convolutional_Networks(vocab_size=vocab_size,
-                                          embedding_size=100,
-                                          num_classes=NUM_CLASSES,
-                                          window_size=window_size,
-                                          batch_size=batch_size)
-  #A, X = model.build_graph()
-  predicted_labels, loss, train_op = model.trainer(learning_rate=learning_rate)
+  model = Text_Graph_Convolutional_Networks(data=X_train,
+                                            vocab_size=vocab_size + 2, 
+                                            doc_count=X_train.shape[0],
+                                            hidden_dim=200,
+                                            num_classes=NUM_CLASSES,
+                                            window_size=window_size)
+  
+  model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+                loss=tf.keras.losses.categorical_crossentropy,
+                metrics=['accuracy'])
+  
+  model.fit(X_train, y_train, epochs=10, batch_size=batch_size)
+  loss, acc = model.evaluate(X_test, y_test)
+  print(f"Loss = {loss}, Accuracy = {acc}")
 
-
-  with tf.compat.v1.Session() as sess:
-      train_data_reader = DataReader(
-          data_path = 'drive/MyDrive/Test_TensorFlow/datasets/w2v/20news-train-encoded.txt',
-          batch_size=batch_size
-      )
-      test_data_reader = DataReader(
-          data_path = 'drive/MyDrive/Test_TensorFlow/datasets/w2v/20news-test-encoded.txt',
-          batch_size=batch_size
-      )
-      step = 0
-      MAX_STEP = 5000
-      sess.run(tf.compat.v1.global_variables_initializer())
-      for step in tqdm(range(MAX_STEP)):
-        next_train_batch = train_data_reader.next_batch()
-        train_data, train_labels, train_sentence_lengths, train_final_tokens = next_train_batch
-
-        print("Computing tfidf train ...")
-        tfidf_matrix_train = compute_tfidf(train_data, vocab_size)
-        print("Computing success !!!")
-        print(f"tfidf train size = {tfidf_matrix_train.shape}")
-        print("Computin pmi train ...")
-        pmi_matrix_train = compute_pmi(train_data, vocab_size, window_size=window_size)
-        print("Computing success")
-        A_train = np.zeros((vocab_size + 2 + tfidf_matrix_train.shape[0], vocab_size + 2 + tfidf_matrix_train.shape[0]), dtype=np.float32)
-        print(f"SHape 1 = {A_train[:vocab_size + 2, vocab_size + 2:vocab_size + 2 + tfidf_matrix_train.shape[0]].shape}")
-        print(f"SHape 2 = {tfidf_matrix_train.T.shape}")
-        A_train[:vocab_size + 2, vocab_size + 2:vocab_size + 2 + tfidf_matrix_train.shape[0]] = tfidf_matrix_train.T.toarray()    #(11314, 18988) => (18988, 11314)  vocab_size = 18986
-        A_train[:vocab_size + 2, :vocab_size + 2] = pmi_matrix_train
-        np.fill_diagonal(A_train, 1)
-        D_train = np.diag(np.sum(A_train, axis=1) ** (-0.5))
-        A_train_ = (D_train * A_train) * D_train
-        X1_train = np.eye(vocab_size + 2 + tfidf_matrix_train.shape[0], dtype=np.float32)
-
-        print(f"train_data {train_data.dtype}")
-        print(f"labels {train_labels.dtype}")
-        print(f"tfidf {tfidf_matrix_train.dtype}")
-        print(f"pmi {pmi_matrix_train.dtype}")
-        print(f"A_train {A_train.dtype}")
-        print(f"X1_train {X1_train.dtype}")
-        plabels_eval, loss_eval, _ = sess.run(
-            [predicted_labels, loss, train_op],
-            feed_dict={
-                model._data: train_data,
-                model._labels: train_labels,
-                model._tfidf_matrix: tfidf_matrix_train,
-                model._pmi_matrix: pmi_matrix_train,
-                model.A: A_train,
-                model.X: X1_train
-            }
-        )
-        if step % 50 == 0:
-          print("predicted labels = ")
-          print(plabels_eval)
-          print("train labels = ")
-          print(train_labels)
-          print(f" Loss = {loss_eval}, Batch id = {train_data_reader._batch_id}")
-        if train_data_reader._batch_id == 0:
-          num_true_preds = 0
-          while True:
-            next_test_batch = test_data_reader.next_batch()
-            test_data, test_labels, test_sentence_lengths, test_final_tokens = next_test_batch
-
-            print("Computing tfidf test ...")
-            tfidf_matrix_test = compute_tfidf(test_data, vocab_size)
-            print("Computing success !!!")
-            print(f"tfidf test size = {tfidf_matrix_test.shape}")
-            print("Computin pmi test ...")
-            pmi_matrix_test = compute_pmi(test_data, vocab_size, window_size=window_size)
-            print("Computing success")
-            A_test = np.zeros((vocab_size + 2 + tfidf_matrix_test.shape[0], vocab_size + 2 + tfidf_matrix_test.shape[0]), dtype=np.float32)
-            print(f"SHape 1 = {A_test[:vocab_size + 2, vocab_size + 2:vocab_size + 2 + tfidf_matrix_test.shape[0]].shape}")
-            print(f"SHape 2 = {tfidf_matrix_test.T.shape}")
-            A_test[:vocab_size + 2, vocab_size + 2:vocab_size + 2 + tfidf_matrix_test.shape[0]] = tfidf_matrix_test.T.toarray()    #(11314, 18988) => (18988, 11314)  vocab_size = 18986
-            A_test[:vocab_size + 2, :vocab_size + 2] = pmi_matrix_test
-            np.fill_diagonal(A_test, 1)
-            D_test = np.diag(np.sum(A_test, axis=1) ** (-0.5))
-            A_test_ = (D_test * A_test) * D_test
-            X1_test = np.eye(vocab_size + 2 + tfidf_matrix_test.shape[0], dtype=np.float32)
-
-            test_plabels_eval = sess.run(
-                predicted_labels,
-                feed_dict={
-                    model._data: test_data,
-                    model._labels: test_labels,
-                    model._tfidf_matrix: tfidf_matrix_test,
-                    model._pmi_matrix: pmi_matrix_test,
-                    model.A: A_test,
-                    model.X: X1_test
-                }
-            )
-            print("test plabels eval = ")
-            print(test_plabels_eval)
-            print("test labels = ")
-            print(test_labels)
-            matches=np.equal(test_plabels_eval, test_labels)
-            num_true_preds += np.sum(matches.astype(float))
-
-            if test_data_reader._batch_id == 0:
-              break
-          print(f"Epoch : {train_data_reader._num_epoch}, num true predicts = {num_true_preds}, length test data = {len(test_data_reader._data)}, Accuracy on test data = {num_true_preds * 100. / len(test_data_reader._data)}")
+  
 
 
 
