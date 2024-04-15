@@ -250,7 +250,7 @@ class Text_Graph_Convolutional_Networks(tf.keras.Model):
     def call(self, inputs):
       #h = self.GCN1(tf.matmul(self.A, self.X))
       #h = tf.concat([self.gcn1(tf.matmul(self.A_blocks[i], self.X_blocks[i])) for i in range(len(self.A_blocks))], axis=0)
-      h = self.gcn1(tf.sparse.sparse_dense_matmul(self.A, self.X))
+      h = self.GCN1(tf.sparse.sparse_dense_matmul(self.A, self.X))
       logits = self.GCN2(h)
       return logits
 
